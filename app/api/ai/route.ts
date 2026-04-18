@@ -7,26 +7,46 @@ const openai = new OpenAI({
 export async function POST(req: Request) {
   const body = await req.json();
 
-  const prompt = `
-You are an academic advisor for Thailand universities.
+  let prompt = "";
 
-Student info:
-- GPA: ${body.gpa}
-- Credits: ${body.credits}
-- Subjects: ${body.subjects.join(", ")}
-- Target University: ${body.university}
+  if (body.compare) {
+    prompt = `
+You are an expert university advisor.
+
+Compare these universities:
+${body.universities.join(", ")}
+
+Student:
+GPA: ${body.gpa}
+Credits: ${body.credits}
+Subjects: ${body.subjects.join(", ")}
 
 Give:
-1. Eligibility evaluation
-2. Transfer credit estimate
-3. Best 3 majors
-4. Short advice
-
-Keep it clear and structured.
+1. Best university choice
+2. Key differences
+3. Final recommendation
 `;
+  } else {
+    prompt = `
+You are an academic advisor for Thailand universities.
+
+Student:
+GPA: ${body.gpa}
+Credits: ${body.credits}
+Subjects: ${body.subjects.join(", ")}
+University: ${body.university}
+
+Give:
+1. Eligibility
+2. Credit transfer estimate
+3. Best majors
+4. Advice
+`;
+  }
 
   const response = await openai.chat.completions.create({
     model: "gpt-4o-mini",
+    temperature: 0.7,
     messages: [{ role: "user", content: prompt }],
   });
 

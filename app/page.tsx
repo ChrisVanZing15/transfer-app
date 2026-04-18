@@ -2,104 +2,202 @@
 
 import { useState, useEffect } from "react";
 import { universities } from "../data/universities";
-import { db } from "../lib/firebase";
-import { collection, addDoc } from "firebase/firestore";
+import { db, auth } from "../lib/firebase";
+import { convertGPA, buildAIRequest } from "../lib/logic";
+
+import { collection, addDoc, getDocs, query, where } from "firebase/firestore";
+
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+} from "firebase/auth";
 
 export default function Home() {
+  const [user, setUser] = useState<any>(null);
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
   const [gpa, setGpa] = useState("");
   const [credits, setCredits] = useState("");
   const [subjects, setSubjects] = useState<string[]>([]);
   const [result, setResult] = useState("");
+
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [compareList, setCompareList] = useState<number[]>([]);
+  const [history, setHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
+  // 🔐 Auth state
   useEffect(() => {
-    const saved = localStorage.getItem("studentData");
-    if (saved) {
-      const data = JSON.parse(saved);
-      setGpa(data.gpa || "");
-      setCredits(data.credits || "");
-      setSubjects(data.subjects || []);
-      setSelectedIndex(data.selectedIndex || 0);
-    }
+    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
+    return () => unsub();
   }, []);
 
+  // 📊 Load history
   useEffect(() => {
-    localStorage.setItem(
-      "studentData",
-      JSON.stringify({ gpa, credits, subjects, selectedIndex }),
-    );
-  }, [gpa, credits, subjects, selectedIndex]);
+    if (!user) return;
 
-  const toggleSubject = (subj: string) => {
-    if (subjects.includes(subj)) {
-      setSubjects(subjects.filter((s) => s !== subj));
-    } else {
-      setSubjects([...subjects, subj]);
+    const loadHistory = async () => {
+      const q = query(
+        collection(db, "students"),
+        where("user", "==", user.email),
+      );
+      const snapshot = await getDocs(q);
+      setHistory(snapshot.docs.map((d) => d.data()));
+    };
+
+    loadHistory();
+  }, [user]);
+
+  const toggleSubject = (s: string) => {
+    setSubjects((prev) =>
+      prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s],
+    );
+  };
+
+  const toggleCompare = (i: number) => {
+    if (compareList.includes(i)) {
+      setCompareList(compareList.filter((x) => x !== i));
+    } else if (compareList.length < 3) {
+      setCompareList([...compareList, i]);
     }
   };
 
+  // 🔐 Auth
+  const handleLogin = async () => {
+    await signInWithEmailAndPassword(auth, email, password);
+  };
+
+  const handleSignup = async () => {
+    await createUserWithEmailAndPassword(auth, email, password);
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+  };
+
+  // 🤖 AI single university
   const handleCheck = async () => {
     const g = parseFloat(gpa);
     const c = parseInt(credits);
     const uni = universities[selectedIndex];
 
-    if (!g || !c) {
-      setResult("⚠️ Please enter valid GPA and credits");
-      return;
-    }
+    if (!g || !c) return setResult("⚠️ Enter valid values");
 
-    let thaiGPA = g > 4 ? (g / 100) * 4 : g;
+    const thaiGPA = convertGPA(g);
 
     setLoading(true);
 
-    try {
-      // 🔥 CALL YOUR AI API
-      const res = await fetch("/api/ai", {
-        method: "POST",
-        body: JSON.stringify({
+    const res = await fetch("/api/ai", {
+      method: "POST",
+      body: JSON.stringify(
+        buildAIRequest({
           gpa: thaiGPA,
           credits: c,
           subjects,
           university: uni.name,
         }),
-      });
+      ),
+    });
 
-      const data = await res.json();
+    const data = await res.json();
 
-      // 🔥 SAVE TO FIREBASE
-      await addDoc(collection(db, "students"), {
-        gpa: thaiGPA,
-        credits: c,
-        subjects,
-        university: uni.name,
-        aiResult: data.result,
-        createdAt: new Date(),
-      });
+    await addDoc(collection(db, "students"), {
+      user: user.email,
+      gpa: thaiGPA,
+      credits: c,
+      subjects,
+      university: uni.name,
+      ai: data.result,
+      createdAt: new Date(),
+    });
 
-      setResult(data.result);
-    } catch (err) {
-      setResult("Error generating AI response");
-    }
-
+    setResult(data.result);
     setLoading(false);
   };
 
+  // 🤖 AI compare
+  const handleCompare = async () => {
+    const selected = compareList.map((i) => universities[i]);
+
+    setLoading(true);
+
+    const res = await fetch("/api/ai", {
+      method: "POST",
+      body: JSON.stringify(
+        buildAIRequest({
+          gpa: convertGPA(parseFloat(gpa)),
+          credits: parseInt(credits),
+          subjects,
+          compare: true,
+          universities: selected.map((u) => u.name),
+        }),
+      ),
+    });
+
+    const data = await res.json();
+    setResult(data.result);
+    setLoading(false);
+  };
+
+  // 🔒 LOGIN SCREEN
+  if (!user) {
+    return (
+      <main className="min-h-screen bg-gradient-to-br from-blue-200 to-white flex items-center justify-center">
+        <div className="bg-white p-8 rounded-xl shadow-xl w-80 space-y-4">
+          <h1 className="text-xl font-bold text-center text-blue-700">
+            Login / Sign Up
+          </h1>
+
+          <input
+            placeholder="Email"
+            className="w-full border p-2 rounded"
+            onChange={(e) => setEmail(e.target.value)}
+          />
+          <input
+            placeholder="Password"
+            type="password"
+            className="w-full border p-2 rounded"
+            onChange={(e) => setPassword(e.target.value)}
+          />
+
+          <button
+            onClick={handleLogin}
+            className="w-full bg-blue-600 text-white p-2 rounded"
+          >
+            Login
+          </button>
+
+          <button
+            onClick={handleSignup}
+            className="w-full bg-blue-400 text-white p-2 rounded"
+          >
+            Sign Up
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  // 🔓 MAIN APP
   return (
-    <main className="min-h-screen bg-gradient-to-br from-blue-200 via-blue-100 to-white flex items-center justify-center p-4">
-      <div className="bg-white/80 backdrop-blur-xl border border-blue-100 shadow-2xl rounded-3xl w-full max-w-lg p-8 space-y-6">
-        <h1 className="text-3xl font-bold text-center text-blue-700">
-          🎓 Transfer Planner AI
-        </h1>
+    <main className="min-h-screen bg-gradient-to-br from-blue-200 via-blue-100 to-white p-4 flex justify-center">
+      <div className="w-full max-w-xl bg-white p-6 rounded-2xl shadow-xl space-y-6">
+        <div className="flex justify-between">
+          <h1 className="font-bold text-blue-700">🎓 Planner AI</h1>
+          <button onClick={handleLogout} className="text-red-500 text-sm">
+            Logout
+          </button>
+        </div>
 
-        <p className="text-center text-blue-500 text-sm">
-          Smart academic planning for Thailand
-        </p>
+        <p className="text-sm text-gray-500">{user.email}</p>
 
-        {/* UNIVERSITY */}
+        {/* FORM */}
         <select
-          className="w-full border p-2 rounded-lg"
-          value={selectedIndex}
+          className="w-full border p-2 rounded"
           onChange={(e) => setSelectedIndex(parseInt(e.target.value))}
         >
           {universities.map((u, i) => (
@@ -109,55 +207,93 @@ export default function Home() {
           ))}
         </select>
 
-        {/* SUBJECTS */}
         <div className="flex gap-2 flex-wrap">
-          {["Math", "Science", "Business"].map((s) => (
-            <button
-              key={s}
-              onClick={() => toggleSubject(s)}
-              className={`px-4 py-1 rounded-full text-sm ${
-                subjects.includes(s)
-                  ? "bg-blue-600 text-white"
-                  : "bg-blue-100 text-blue-700"
-              }`}
-            >
-              {s}
-            </button>
-          ))}
+          {["Math", "Science", "Business", "Engineering", " Liberal Arts"].map(
+            (s) => (
+              <button
+                key={s}
+                onClick={() => toggleSubject(s)}
+                className={`px-3 py-1 rounded ${
+                  subjects.includes(s)
+                    ? "bg-blue-600 text-white"
+                    : "bg-blue-100 text-blue-700"
+                }`}
+              >
+                {s}
+              </button>
+            ),
+          )}
         </div>
 
-        {/* INPUTS */}
-        <div className="grid grid-cols-2 gap-3">
-          <input
-            type="number"
-            placeholder="GPA"
-            value={gpa}
-            onChange={(e) => setGpa(e.target.value)}
-            className="border p-2 rounded-lg"
-          />
-          <input
-            type="number"
-            placeholder="Credits"
-            value={credits}
-            onChange={(e) => setCredits(e.target.value)}
-            className="border p-2 rounded-lg"
-          />
-        </div>
+        <input
+          placeholder="GPA"
+          className="w-full border p-2 rounded"
+          onChange={(e) => setGpa(e.target.value)}
+        />
 
-        {/* BUTTON */}
+        <input
+          placeholder="Credits"
+          className="w-full border p-2 rounded"
+          onChange={(e) => setCredits(e.target.value)}
+        />
+
         <button
           onClick={handleCheck}
-          className="w-full bg-gradient-to-r from-blue-500 to-blue-700 text-white py-3 rounded-xl font-semibold"
+          className="w-full bg-blue-600 text-white p-2 rounded"
         >
-          {loading ? "Analyzing..." : "Analyze with AI"}
+          {loading ? "Analyzing..." : "Analyze"}
         </button>
+
+        {/* COMPARE */}
+        <div>
+          <h2 className="font-semibold text-blue-700">Compare (max 3)</h2>
+
+          <div className="flex flex-wrap gap-2">
+            {universities.map((u, i) => (
+              <button
+                key={i}
+                onClick={() => toggleCompare(i)}
+                className={`px-2 py-1 text-sm rounded ${
+                  compareList.includes(i)
+                    ? "bg-blue-600 text-white"
+                    : "bg-blue-100"
+                }`}
+              >
+                {u.name}
+              </button>
+            ))}
+          </div>
+
+          {compareList.length > 1 && (
+            <button
+              onClick={handleCompare}
+              className="mt-2 w-full bg-blue-500 text-white p-2 rounded"
+            >
+              Compare AI
+            </button>
+          )}
+        </div>
 
         {/* RESULT */}
         {result && (
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 whitespace-pre-line">
+          <div className="bg-blue-50 p-4 rounded whitespace-pre-line">
             {result}
           </div>
         )}
+
+        {/* DASHBOARD */}
+        <div>
+          <h2 className="font-semibold text-blue-700">History</h2>
+
+          <div className="max-h-40 overflow-y-auto space-y-2">
+            {history.map((h, i) => (
+              <div key={i} className="bg-blue-50 p-2 rounded text-sm">
+                <p>{h.university}</p>
+                <p>GPA: {h.gpa}</p>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </main>
   );
