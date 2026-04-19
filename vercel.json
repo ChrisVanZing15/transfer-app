@@ -1,0 +1,14 @@
+{
+  "builds": [
+    {
+      "src": "student-transfer-app/package.json",
+      "use": "@vercel/next"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "student-transfer-app/$1"
+    }
+  ]
+}
